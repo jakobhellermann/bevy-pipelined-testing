@@ -18,11 +18,14 @@ use bevy_inspector_egui::WorldInspectorPlugin;
 use cam_display::{CamDisplay, CamDisplayPlugin};
 use render_to_texture::{RenderToTexture, RenderToTexturePlugin};
 
+mod utils;
+
 fn main() {
     let mut app = App::new();
     app.add_plugins(PipelinedDefaultPlugins)
         .add_plugin(RenderToTexturePlugin)
         .add_plugin(CamDisplayPlugin)
+        .add_plugin(utils::FlycamPlugin)
         .add_plugin(WorldInspectorPlugin::new())
         .add_startup_system(setup.system())
         .run();
@@ -44,9 +47,10 @@ fn setup(
     // Regular camera
     commands
         .spawn_bundle(PerspectiveCameraBundle {
-            transform: Transform::from_xyz(-2.0, 2.5, 5.0).looking_at(Vec3::default(), Vec3::Y),
+            transform: Transform::from_xyz(-2.0, 2.5, 5.0), //.looking_at(Vec3::default(), Vec3::Y),
             ..Default::default()
         })
+        .insert(utils::Flycam)
         .insert(Name::new("regular camera"));
 
     // Additional cameras
