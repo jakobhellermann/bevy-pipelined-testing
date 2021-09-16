@@ -2,21 +2,18 @@ use bevy::core_pipeline::node::MAIN_PASS_DEPENDENCIES;
 use bevy::core_pipeline::{draw_3d_graph, Transparent3dPhase, ViewDepthTexture};
 use bevy::ecs::prelude::*;
 use bevy::prelude::{App, Assets, Handle, Plugin};
-use bevy::render2::camera::{Camera, ExtractedCameraNames};
+use bevy::render2::camera::Camera;
 use bevy::render2::render_asset::RenderAssets;
-use bevy::render2::render_graph::{self, RenderGraph, SlotValue};
+use bevy::render2::render_graph::{self, RenderGraph, RenderGraphContext, SlotValue};
 use bevy::render2::render_phase::RenderPhase;
 use bevy::render2::render_resource::Extent3d;
+use bevy::render2::renderer::RenderContext;
 use bevy::render2::texture::Image;
 use bevy::render2::{RenderApp, RenderStage};
 use bevy::window::Windows;
 
-pub mod camera {
-    pub const CAM_2: &str = "cam_2";
-}
-
 pub mod node {
-    pub const CAM_2_NODE: &str = "second_cam_node";
+    pub const RENDER_TO_TEXTURE: &str = "render_to_texture_node";
 }
 
 pub struct RenderToTexture(pub Handle<Image>);
@@ -30,15 +27,15 @@ impl Plugin for RenderToTexturePlugin {
         render_app.add_system_to_stage(RenderStage::Extract, extract_rtt_render_phase);
 
         let mut render_graph = render_app.world.get_resource_mut::<RenderGraph>().unwrap();
-        render_graph.add_node(node::CAM_2_NODE, SecondCamDriverNode);
+        render_graph.add_node(node::RENDER_TO_TEXTURE, SecondCamDriverNode::new());
         render_graph
-            .add_node_edge(node::CAM_2_NODE, MAIN_PASS_DEPENDENCIES)
+            .add_node_edge(node::RENDER_TO_TEXTURE, MAIN_PASS_DEPENDENCIES)
             .unwrap();
     }
 }
 
 #[derive(SystemLabel, Clone, Debug, Hash, PartialEq, Eq)]
-enum RenderToTextureSystem {
+pub enum RenderToTextureSystem {
     ResizeTexture,
 }
 
@@ -78,32 +75,49 @@ fn extract_rtt_render_phase(
     }
 }
 
-struct SecondCamDriverNode;
+struct SecondCamDriverNode {
+    query: Option<QueryState<Entity, With<RenderToTexture>>>,
+    rtt_cameras: Vec<Entity>,
+}
+impl SecondCamDriverNode {
+    fn new() -> SecondCamDriverNode {
+        SecondCamDriverNode {
+            query: None,
+            rtt_cameras: Vec::new(),
+        }
+    }
+}
 
 impl render_graph::Node for SecondCamDriverNode {
+    fn update(&mut self, world: &mut World) {
+        let query_state = self.query.get_or_insert_with(|| QueryState::new(world));
+        query_state.update_archetypes(world);
+
+        self.rtt_cameras = query_state.iter(world).collect();
+    }
+
     fn run(
         &self,
-        graph: &mut render_graph::RenderGraphContext,
-        _render_context: &mut bevy::render2::renderer::RenderContext,
+        graph: &mut RenderGraphContext,
+        _: &mut RenderContext,
         world: &World,
     ) -> Result<(), render_graph::NodeRunError> {
-        let extracted_cameras = world.get_resource::<ExtractedCameraNames>().unwrap();
-        let camera_entity = *extracted_cameras.entities.get(camera::CAM_2).unwrap();
+        for &camera_entity in &self.rtt_cameras {
+            let render_to_texture = world.get::<RenderToTexture>(camera_entity).unwrap();
+            let depth_texture = world.get::<ViewDepthTexture>(camera_entity).unwrap();
 
-        let render_to_texture = world.get::<RenderToTexture>(camera_entity).unwrap();
-        let depth_texture = world.get::<ViewDepthTexture>(camera_entity).unwrap();
+            let image_render_assets = world.get_resource::<RenderAssets<Image>>().unwrap();
+            let gpu_image = &image_render_assets[&render_to_texture.0];
 
-        let image_render_assets = world.get_resource::<RenderAssets<Image>>().unwrap();
-        let gpu_image = &image_render_assets[&render_to_texture.0];
-
-        graph.run_sub_graph(
-            draw_3d_graph::NAME,
-            vec![
-                SlotValue::Entity(camera_entity),
-                SlotValue::TextureView(gpu_image.texture_view.clone()),
-                SlotValue::TextureView(depth_texture.view.clone()),
-            ],
-        )?;
+            graph.run_sub_graph(
+                draw_3d_graph::NAME,
+                vec![
+                    SlotValue::Entity(camera_entity),
+                    SlotValue::TextureView(gpu_image.texture_view.clone()),
+                    SlotValue::TextureView(depth_texture.view.clone()),
+                ],
+            )?;
+        }
 
         Ok(())
     }
