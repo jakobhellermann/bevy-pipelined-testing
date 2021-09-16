@@ -26,6 +26,7 @@ fn main() {
     // app.add_plugins_with(PipelinedDefaultPlugins, |p| p.disable::<bevy::log::LogPlugin>())
     app.add_plugins(PipelinedDefaultPlugins)
         .add_plugin(WorldInspectorPlugin::new())
+        .add_system(swap_cam2_textures)
         .add_startup_system(setup.system());
 
     let render_app = app.sub_app(RenderApp);
@@ -58,7 +59,7 @@ impl render_graph::Node for SecondCamDriverNode {
         let depth_texture = world.get::<ViewDepthTexture>(camera_entity).unwrap();
 
         let image_render_assets = world.get_resource::<RenderAssets<Image>>().unwrap();
-        let gpu_image = &image_render_assets[&cam2.render_to_texture];
+        let gpu_image = &image_render_assets[&cam2.texture_render];
 
         graph.run_sub_graph(
             draw_3d_graph::NAME,
@@ -75,7 +76,13 @@ impl render_graph::Node for SecondCamDriverNode {
 
 #[derive(Clone)]
 struct Cam2 {
-    render_to_texture: Handle<Image>,
+    texture_render: Handle<Image>,
+    texture_material: Handle<Image>,
+}
+impl Cam2 {
+    fn swap_textures(&mut self) {
+        std::mem::swap(&mut self.texture_render, &mut self.texture_material);
+    }
 }
 
 fn extract_cam2_render_phase(mut commands: Commands, cams: Query<(Entity, &Cam2), With<Camera>>) {
@@ -86,6 +93,21 @@ fn extract_cam2_render_phase(mut commands: Commands, cams: Query<(Entity, &Cam2)
         entity.insert(cam2.clone());
     }
 }
+
+fn swap_cam2_textures(
+    mut cams: Query<&mut Cam2>,
+    cam_display: Query<&Handle<StandardMaterial>, With<CamDisplay>>,
+    mut standard_materials: ResMut<Assets<StandardMaterial>>,
+) {
+    let mut cam = cams.single_mut();
+    let cam_display_material = cam_display.single();
+    let cam_display_material = standard_materials.get_mut(cam_display_material).unwrap();
+
+    cam.swap_textures();
+    cam_display_material.base_color_texture = Some(cam.texture_material.clone_weak());
+}
+
+struct CamDisplay;
 
 fn setup(
     mut commands: Commands,
@@ -119,24 +141,27 @@ fn setup(
     );
     img.texture_descriptor.usage =
         TextureUsage::RENDER_ATTACHMENT | TextureUsage::SAMPLED | TextureUsage::COPY_DST;
-    let cam_2_texture = images.add(img);
+    let cam_2_texture_render = images.add(img.clone());
+    let cam_2_texture_material = images.add(img);
 
     commands
         .spawn_bundle(PbrBundle {
             mesh: meshes.add(Mesh::from(shape::Plane { size: 1.0 })),
             material: materials.add(StandardMaterial {
-                // base_color_texture: Some(cam_2_texture.clone()),
+                base_color_texture: Some(cam_2_texture_material.clone_weak()),
+                unlit: true,
                 ..Default::default()
             }),
             transform: Transform {
                 translation: Vec3::new(-1.3, 1.5, -1.0),
-                rotation: Quat::from_euler(bevy::math::EulerRot::XYZ, TAU / 4.0, 0.0, 0.0),
+                rotation: Quat::from_euler(bevy::math::EulerRot::XYZ, TAU / 4.0, TAU / 2.0, 0.0),
                 scale: Vec3::ONE,
             },
             ..Default::default()
         })
         .insert(NotShadowCaster)
-        .insert(Name::new("Plane"));
+        .insert(Name::new("Plane"))
+        .insert(CamDisplay);
 
     commands.spawn_bundle(PointLightBundle {
         point_light: PointLight {
@@ -157,7 +182,8 @@ fn setup(
             ..PerspectiveCameraBundle::with_name(CAM_2)
         })
         .insert(Cam2 {
-            render_to_texture: cam_2_texture,
+            texture_render: cam_2_texture_render,
+            texture_material: cam_2_texture_material,
         });
     active_cameras.add(CAM_2);
 }
