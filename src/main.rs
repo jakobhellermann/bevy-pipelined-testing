@@ -44,6 +44,12 @@ fn setup(
     let cam_2_render_texture = images.add(dummy_image());
     let cam_2_material_texture = images.add(dummy_image());
 
+    let pos_portal_a = Vec3::new(-1.0, 1.0, -5.0 + 0.26);
+    let pos_portal_b = Vec3::new(1.0, 2.0, -5.0 + 0.26);
+
+    let rotation_display = Quat::from_euler(bevy::math::EulerRot::XYZ, TAU / 4.0, TAU / 2.0, 0.0);
+    let rotation_camera = Quat::from_euler(bevy::math::EulerRot::XYZ, 0.0, TAU / 2.0, 0.0);
+
     // Regular camera
     commands
         .spawn_bundle(PerspectiveCameraBundle {
@@ -56,7 +62,11 @@ fn setup(
     // Additional cameras
     let additional_cam_1 = commands
         .spawn_bundle(PerspectiveCameraBundle {
-            transform: Transform::from_xyz(-2.0, 2.5, -5.0).looking_at(Vec3::default(), Vec3::Y),
+            transform: Transform {
+                translation: pos_portal_b,
+                rotation: rotation_camera,
+                ..Default::default()
+            },
             ..PerspectiveCameraBundle::with_name("additional camera 1")
         })
         .insert(RenderToTexture(cam_1_render_texture))
@@ -66,8 +76,11 @@ fn setup(
 
     let additional_cam_2 = commands
         .spawn_bundle(PerspectiveCameraBundle {
-            transform: Transform::from_xyz(-2.0, 2.5, 5.0)
-                .looking_at(Vec3::new(-2.0, 2.5, -5.0), Vec3::Y),
+            transform: Transform {
+                translation: pos_portal_a,
+                rotation: rotation_camera,
+                ..Default::default()
+            },
             ..PerspectiveCameraBundle::with_name("additional camera 2")
         })
         .insert(RenderToTexture(cam_2_render_texture))
@@ -92,6 +105,14 @@ fn setup(
         })
         .insert(Name::new("Cube"));
     commands
+        .spawn_bundle(PbrBundle {
+            mesh: meshes.add(Mesh::from(shape::Box::new(5.0, 3.0, 0.5))),
+            material: materials.add(Color::rgb(0.8, 0.7, 0.6).into()),
+            transform: Transform::from_xyz(0.0, 1.5, -5.0),
+            ..Default::default()
+        })
+        .insert(Name::new("Wall"));
+    commands
         .spawn_bundle(PointLightBundle {
             point_light: PointLight {
                 intensity: 3100.0,
@@ -113,8 +134,8 @@ fn setup(
                 ..Default::default()
             }),
             transform: Transform {
-                translation: Vec3::new(-1.3, 1.5, -1.0),
-                rotation: Quat::from_euler(bevy::math::EulerRot::XYZ, TAU / 4.0, TAU / 2.0, 0.0),
+                translation: pos_portal_a,
+                rotation: rotation_display,
                 scale: Vec3::new(1.77, 1.0, 1.0),
             },
             ..Default::default()
@@ -135,8 +156,8 @@ fn setup(
                 ..Default::default()
             }),
             transform: Transform {
-                translation: Vec3::new(1.5, 1.5, -0.2),
-                rotation: Quat::from_euler(bevy::math::EulerRot::XYZ, TAU / 4.0, TAU / 2.0, -0.5),
+                translation: pos_portal_b,
+                rotation: rotation_display,
                 scale: Vec3::new(1.77, 1.0, 1.0),
             },
             ..Default::default()
