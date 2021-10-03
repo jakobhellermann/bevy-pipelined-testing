@@ -2,15 +2,12 @@ use bevy::core_pipeline::Transparent3d;
 use bevy::ecs::prelude::*;
 use bevy::ecs::system::lifetimeless::*;
 use bevy::ecs::system::SystemParamItem;
-use bevy::math::{Vec2, Vec3, Vec4};
+use bevy::math::Vec2;
 use bevy::pbr2::{DrawMesh, MeshUniform, PbrShaders, SetMeshViewBindGroup, SetTransformBindGroup};
-use bevy::prelude::{
-    AddAsset, App, AssetServer, Assets, GlobalTransform, Handle, Plugin, Transform,
-};
+use bevy::prelude::{AddAsset, App, GlobalTransform, Handle, Plugin, Transform};
 use bevy::reflect::TypeUuid;
-use bevy::render2::camera::PerspectiveCameraBundle;
-use bevy::render2::color::Color;
-use bevy::render2::mesh::{shape, Mesh};
+
+use bevy::render2::mesh::Mesh;
 use bevy::render2::render_asset::{
     PrepareAssetError, RenderAsset, RenderAssetPlugin, RenderAssets,
 };
@@ -24,29 +21,36 @@ use bevy::render2::shader::Shader;
 use bevy::render2::texture::{BevyDefault, GpuImage, Image};
 use bevy::render2::view::ExtractedView;
 use bevy::render2::{RenderApp, RenderStage};
-use bevy::PipelinedDefaultPlugins;
-use bevy_portals::utils::Flycam;
-use crevice::std140::{AsStd140, Std140};
+
+use crevice::std140::AsStd140;
+
+#[derive(Default, Bundle)]
+pub struct ScreenspaceTextureBundle {
+    pub mesh: Handle<Mesh>,
+    pub material: Handle<ScreenspaceTextureMaterial>,
+    pub global_transform: GlobalTransform,
+    pub transform: Transform,
+}
 
 #[derive(Debug, Clone, TypeUuid)]
 #[uuid = "4ee9c363-1124-4113-890e-199d81b00281"]
-pub struct CustomMaterial {
-    color: Color,
-    texture: Handle<Image>,
+pub struct ScreenspaceTextureMaterial {
+    // pub color: Color,
+    pub texture: Handle<Image>,
 }
 
 #[derive(Clone)]
-pub struct GpuCustomMaterial {
-    _buffer: Buffer,
+pub struct GpuScreenspaceTextureMaterial {
+    // _buffer: Buffer,
     bind_group: BindGroup,
 }
 
-impl RenderAsset for CustomMaterial {
-    type ExtractedAsset = CustomMaterial;
-    type PreparedAsset = GpuCustomMaterial;
+impl RenderAsset for ScreenspaceTextureMaterial {
+    type ExtractedAsset = ScreenspaceTextureMaterial;
+    type PreparedAsset = GpuScreenspaceTextureMaterial;
     type Param = (
         SRes<RenderDevice>,
-        SRes<CustomShaders>,
+        SRes<SSTShaders>,
         SRes<RenderAssets<Image>>,
     );
 
@@ -59,12 +63,12 @@ impl RenderAsset for CustomMaterial {
         (render_device, custom_pipeline, gpu_images): &mut SystemParamItem<Self::Param>,
     ) -> Result<Self::PreparedAsset, PrepareAssetError<Self::ExtractedAsset>> {
         // color
-        let color: Vec4 = extracted_asset.color.as_rgba_linear().into();
+        /* let color: Vec4 = extracted_asset.color.as_rgba_linear().into();
         let buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
             contents: color.as_std140().as_bytes(),
             label: None,
             usage: BufferUsage::UNIFORM | BufferUsage::COPY_DST,
-        });
+        }); */
 
         // texture
         let gpu_image: &GpuImage = match gpu_images.get(&extracted_asset.texture) {
@@ -77,92 +81,53 @@ impl RenderAsset for CustomMaterial {
             entries: &[
                 BindGroupEntry {
                     binding: 0,
-                    resource: buffer.as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 1,
                     resource: BindingResource::TextureView(&gpu_image.texture_view),
                 },
                 BindGroupEntry {
-                    binding: 2,
+                    binding: 1,
                     resource: BindingResource::Sampler(&gpu_image.sampler),
                 },
+                /*BindGroupEntry {
+                    binding: 2,
+                    resource: buffer.as_entire_binding(),
+                },*/
             ],
             label: None,
             layout: &custom_pipeline.material_layout,
         });
 
-        Ok(GpuCustomMaterial {
-            _buffer: buffer,
+        Ok(GpuScreenspaceTextureMaterial {
+            // _buffer: buffer,
             bind_group,
         })
     }
 }
 
-pub struct CustomMaterialPlugin;
+pub struct ScreenspaceTexturePlugin;
 
-impl Plugin for CustomMaterialPlugin {
+impl Plugin for ScreenspaceTexturePlugin {
     fn build(&self, app: &mut App) {
-        app.add_asset::<CustomMaterial>()
-            .add_plugin(ExtractComponentPlugin::<Handle<CustomMaterial>>::default())
-            .add_plugin(RenderAssetPlugin::<CustomMaterial>::default());
+        app.add_asset::<ScreenspaceTextureMaterial>()
+            .add_plugin(ExtractComponentPlugin::<Handle<ScreenspaceTextureMaterial>>::default())
+            .add_plugin(RenderAssetPlugin::<ScreenspaceTextureMaterial>::default());
         app.sub_app(RenderApp)
-            .add_render_command::<Transparent3d, DrawCustom>()
-            .init_resource::<CustomShaders>()
-            .init_resource::<CustomShaderMeta>()
+            .add_render_command::<Transparent3d, DrawScreenspaceTexture>()
+            .init_resource::<SSTShaders>()
+            .init_resource::<SSTMeta>()
             .init_resource::<ViewSizeUniforms>()
             .add_system_to_stage(RenderStage::Prepare, prepare_view_sizes)
             .add_system_to_stage(RenderStage::Queue, queue_view_sizes)
-            .add_system_to_stage(RenderStage::Queue, queue_custom);
+            .add_system_to_stage(RenderStage::Queue, queue_sst);
     }
 }
 
-fn main() {
-    App::new()
-        .add_plugins(PipelinedDefaultPlugins)
-        .add_plugin(CustomMaterialPlugin)
-        .add_plugin(bevy_portals::utils::FlycamPlugin)
-        .add_startup_system(setup)
-        .run();
-}
-
-/// set up a simple 3D scene
-fn setup(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<CustomMaterial>>,
-    asset_server: Res<AssetServer>,
-) {
-    let texture = asset_server.load("texture.png");
-
-    // cube
-    commands.spawn().insert_bundle((
-        meshes.add(Mesh::from(shape::Cube { size: 1.0 })),
-        Transform::from_xyz(0.0, 0.5, 0.0),
-        GlobalTransform::default(),
-        materials.add(CustomMaterial {
-            color: Color::GREEN,
-            texture,
-        }),
-    ));
-
-    // camera
-    commands
-        .spawn_bundle(PerspectiveCameraBundle {
-            transform: Transform::from_xyz(-2.0, 2.5, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
-            ..Default::default()
-        })
-        .insert(Flycam);
-}
-
-pub struct CustomShaders {
+pub struct SSTShaders {
     material_layout: BindGroupLayout,
-    pipeline: RenderPipeline,
-
     view_size_layout: BindGroupLayout,
+    pipeline: RenderPipeline,
 }
 
-impl FromWorld for CustomShaders {
+impl FromWorld for SSTShaders {
     fn from_world(world: &mut World) -> Self {
         let render_device = world.get_resource::<RenderDevice>().unwrap();
         let shader = Shader::from_wgsl(include_str!("../assets/custom.wgsl"));
@@ -170,20 +135,9 @@ impl FromWorld for CustomShaders {
 
         let material_layout = render_device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             entries: &[
-                // uniform data
-                BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: ShaderStage::FRAGMENT,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: BufferSize::new(Vec4::std140_size_static() as u64),
-                    },
-                    count: None,
-                },
                 // texture
                 BindGroupLayoutEntry {
-                    binding: 1,
+                    binding: 0,
                     visibility: ShaderStage::FRAGMENT,
                     ty: BindingType::Texture {
                         multisampled: false,
@@ -194,7 +148,7 @@ impl FromWorld for CustomShaders {
                 },
                 // sampler
                 BindGroupLayoutEntry {
-                    binding: 2,
+                    binding: 1,
                     visibility: ShaderStage::FRAGMENT,
                     ty: BindingType::Sampler {
                         comparison: false,
@@ -202,6 +156,17 @@ impl FromWorld for CustomShaders {
                     },
                     count: None,
                 },
+                // uniform data
+                /*BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStage::FRAGMENT,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: BufferSize::new(Vec4::std140_size_static() as u64),
+                    },
+                    count: None,
+                },*/
             ],
             label: None,
         });
@@ -312,7 +277,7 @@ impl FromWorld for CustomShaders {
             },
         });
 
-        CustomShaders {
+        SSTShaders {
             pipeline,
             material_layout,
             view_size_layout,
@@ -321,34 +286,19 @@ impl FromWorld for CustomShaders {
 }
 
 #[derive(Default)]
-struct CustomShaderMeta {
+struct SSTMeta {
     view_size_bind_group: Option<BindGroup>,
 }
 
+#[derive(AsStd140)]
 struct ViewSize {
     size: Vec2,
-}
-impl AsStd140 for ViewSize {
-    type Std140Type = crevice::std140::Vec2;
-
-    fn as_std140(&self) -> Self::Std140Type {
-        crevice::std140::Vec2 {
-            x: self.size.x,
-            y: self.size.y,
-        }
-    }
-
-    fn from_std140(val: Self::Std140Type) -> Self {
-        ViewSize {
-            size: Vec2::new(val.x, val.y),
-        }
-    }
 }
 struct ViewSizeUniformOffset(u32);
 
 #[derive(Default)]
 struct ViewSizeUniforms {
-    pub uniforms: DynamicUniformVec<ViewSize>,
+    uniforms: DynamicUniformVec<ViewSize>,
 }
 impl ViewSizeUniforms {
     fn push(&mut self, value: ViewSize) -> ViewSizeUniformOffset {
@@ -380,8 +330,8 @@ fn prepare_view_sizes(
 }
 
 fn queue_view_sizes(
-    mut custom_shader_meta: ResMut<CustomShaderMeta>,
-    custom_shaders: Res<CustomShaders>,
+    mut custom_shader_meta: ResMut<SSTMeta>,
+    custom_shaders: Res<SSTShaders>,
     view_size_uniforms: Res<ViewSizeUniforms>,
     render_device: Res<RenderDevice>,
 ) {
@@ -401,15 +351,18 @@ fn queue_view_sizes(
     custom_shader_meta.view_size_bind_group = Some(bind_group);
 }
 
-pub fn queue_custom(
+fn queue_sst(
     transparent_3d_draw_functions: Res<DrawFunctions<Transparent3d>>,
-    materials: Res<RenderAssets<CustomMaterial>>,
-    material_meshes: Query<(Entity, &Handle<CustomMaterial>, &MeshUniform), With<Handle<Mesh>>>,
+    materials: Res<RenderAssets<ScreenspaceTextureMaterial>>,
+    material_meshes: Query<
+        (Entity, &Handle<ScreenspaceTextureMaterial>, &MeshUniform),
+        With<Handle<Mesh>>,
+    >,
     mut views: Query<(&ExtractedView, &mut RenderPhase<Transparent3d>)>,
 ) {
     let draw_custom = transparent_3d_draw_functions
         .read()
-        .get_id::<DrawCustom>()
+        .get_id::<DrawScreenspaceTexture>()
         .unwrap();
     for (view, mut transparent_phase) in views.iter_mut() {
         let view_matrix = view.transform.compute_matrix();
@@ -426,7 +379,7 @@ pub fn queue_custom(
     }
 }
 
-type DrawCustom = (
+type DrawScreenspaceTexture = (
     SetCustomMaterialPipeline,
     SetMeshViewBindGroup<0>,
     SetTransformBindGroup<2>,
@@ -438,9 +391,9 @@ struct SetCustomMaterialPipeline;
 
 impl RenderCommand<Transparent3d> for SetCustomMaterialPipeline {
     type Param = (
-        SRes<RenderAssets<CustomMaterial>>,
-        SRes<CustomShaders>,
-        SQuery<Read<Handle<CustomMaterial>>>,
+        SRes<RenderAssets<ScreenspaceTextureMaterial>>,
+        SRes<SSTShaders>,
+        SQuery<Read<Handle<ScreenspaceTextureMaterial>>>,
     );
     fn render<'w>(
         _view: Entity,
@@ -450,6 +403,7 @@ impl RenderCommand<Transparent3d> for SetCustomMaterialPipeline {
     ) {
         let material_handle = query.get(item.entity).unwrap();
         let material = materials.into_inner().get(material_handle).unwrap();
+
         pass.set_render_pipeline(&custom_pipeline.into_inner().pipeline);
         pass.set_bind_group(1, &material.bind_group, &[]);
     }
@@ -458,7 +412,7 @@ impl RenderCommand<Transparent3d> for SetCustomMaterialPipeline {
 struct SetViewSizesBindGroup<const I: usize>;
 
 impl<const I: usize> RenderCommand<Transparent3d> for SetViewSizesBindGroup<I> {
-    type Param = (SRes<CustomShaderMeta>, SQuery<Read<ViewSizeUniformOffset>>);
+    type Param = (SRes<SSTMeta>, SQuery<Read<ViewSizeUniformOffset>>);
 
     fn render<'w>(
         view: Entity,
