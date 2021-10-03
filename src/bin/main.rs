@@ -3,7 +3,7 @@ use std::f32::consts::TAU;
 use bevy::core::Name;
 use bevy::ecs::prelude::*;
 use bevy::math::prelude::*;
-use bevy::pbr2::{NotShadowCaster, PbrBundle, PointLight, PointLightBundle, StandardMaterial};
+use bevy::pbr2::{PbrBundle, PointLight, PointLightBundle, StandardMaterial};
 use bevy::prelude::{App, Assets, Transform};
 use bevy::render2::camera::{ActiveCameras, PerspectiveCameraBundle};
 use bevy::render2::color::Color;
@@ -14,6 +14,7 @@ use bevy_inspector_egui::WorldInspectorPlugin;
 
 use bevy_portals::cam_display::{CamDisplay, CamDisplayPlugin};
 use bevy_portals::render_to_texture::{RenderToTexture, RenderToTexturePlugin};
+use bevy_portals::screenspace_texture::{ScreenspaceTextureBundle, ScreenspaceTextureMaterial};
 use bevy_portals::utils;
 
 fn main() {
@@ -31,6 +32,7 @@ fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut sst_materials: ResMut<Assets<ScreenspaceTextureMaterial>>,
     mut active_cameras: ResMut<ActiveCameras>,
     mut images: ResMut<Assets<Image>>,
 ) {
@@ -121,13 +123,10 @@ fn setup(
 
     // Camera display planes
     commands
-        .spawn_bundle(PbrBundle {
+        .spawn_bundle(ScreenspaceTextureBundle {
             mesh: meshes.add(Mesh::from(shape::Plane { size: 1.0 })),
-            material: materials.add(StandardMaterial {
-                base_color: Color::rgb_u8(242, 240, 240),
-                base_color_texture: Some(cam_1_material_texture),
-                unlit: true,
-                ..Default::default()
+            material: sst_materials.add(ScreenspaceTextureMaterial {
+                texture: cam_1_material_texture,
             }),
             transform: Transform {
                 translation: pos_portal_a,
@@ -136,20 +135,16 @@ fn setup(
             },
             ..Default::default()
         })
-        .insert(NotShadowCaster)
         .insert(Name::new("Plane 1"))
         .insert(CamDisplay {
             corresponding_camera: additional_cam_1,
         });
 
     commands
-        .spawn_bundle(PbrBundle {
+        .spawn_bundle(ScreenspaceTextureBundle {
             mesh: meshes.add(Mesh::from(shape::Plane { size: 1.0 })),
-            material: materials.add(StandardMaterial {
-                base_color: Color::rgb_u8(242, 240, 240),
-                base_color_texture: Some(cam_2_material_texture),
-                unlit: true,
-                ..Default::default()
+            material: sst_materials.add(ScreenspaceTextureMaterial {
+                texture: cam_2_material_texture,
             }),
             transform: Transform {
                 translation: pos_portal_b,
@@ -158,7 +153,6 @@ fn setup(
             },
             ..Default::default()
         })
-        .insert(NotShadowCaster)
         .insert(Name::new("Plane 2"))
         .insert(CamDisplay {
             corresponding_camera: additional_cam_2,
