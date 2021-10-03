@@ -2,7 +2,7 @@ use bevy::core_pipeline::Transparent3d;
 use bevy::ecs::prelude::*;
 use bevy::ecs::system::lifetimeless::*;
 use bevy::ecs::system::SystemParamItem;
-use bevy::math::{Vec3, Vec4};
+use bevy::math::{Vec2, Vec3, Vec4};
 use bevy::pbr2::{DrawMesh, MeshUniform, PbrShaders, SetMeshViewBindGroup, SetTransformBindGroup};
 use bevy::prelude::{AddAsset, App, Assets, GlobalTransform, Handle, Plugin, Transform};
 use bevy::reflect::TypeUuid;
@@ -17,7 +17,7 @@ use bevy::render2::render_phase::{
     AddRenderCommand, DrawFunctions, RenderCommand, RenderPhase, TrackedRenderPass,
 };
 use bevy::render2::render_resource::*;
-use bevy::render2::renderer::RenderDevice;
+use bevy::render2::renderer::{RenderDevice, RenderQueue};
 use bevy::render2::shader::Shader;
 use bevy::render2::texture::BevyDefault;
 use bevy::render2::view::ExtractedView;
@@ -41,7 +41,7 @@ pub struct GpuCustomMaterial {
 impl RenderAsset for CustomMaterial {
     type ExtractedAsset = CustomMaterial;
     type PreparedAsset = GpuCustomMaterial;
-    type Param = (SRes<RenderDevice>, SRes<CustomPipeline>);
+    type Param = (SRes<RenderDevice>, SRes<CustomShaders>);
 
     fn extract_asset(&self) -> Self::ExtractedAsset {
         self.clone()
@@ -81,7 +81,11 @@ impl Plugin for CustomMaterialPlugin {
             .add_plugin(RenderAssetPlugin::<CustomMaterial>::default());
         app.sub_app(RenderApp)
             .add_render_command::<Transparent3d, DrawCustom>()
-            .init_resource::<CustomPipeline>()
+            .init_resource::<CustomShaders>()
+            .init_resource::<CustomShaderMeta>()
+            .init_resource::<ViewSizeUniforms>()
+            .add_system_to_stage(RenderStage::Prepare, prepare_view_sizes)
+            .add_system_to_stage(RenderStage::Queue, queue_view_sizes)
             .add_system_to_stage(RenderStage::Queue, queue_custom);
     }
 }
@@ -120,13 +124,14 @@ fn setup(
         .insert(Flycam);
 }
 
-pub struct CustomPipeline {
+pub struct CustomShaders {
     material_layout: BindGroupLayout,
     pipeline: RenderPipeline,
+
+    view_size_layout: BindGroupLayout,
 }
 
-// TODO: this pattern for initializing the shaders / pipeline isn't ideal. this should be handled by the asset system
-impl FromWorld for CustomPipeline {
+impl FromWorld for CustomShaders {
     fn from_world(world: &mut World) -> Self {
         let render_device = world.get_resource::<RenderDevice>().unwrap();
         let shader = Shader::from_wgsl(include_str!("../assets/custom.wgsl"));
@@ -145,6 +150,21 @@ impl FromWorld for CustomPipeline {
             }],
             label: None,
         });
+
+        let view_size_layout = render_device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[BindGroupLayoutEntry {
+                binding: 0,
+                visibility: ShaderStage::FRAGMENT,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Uniform,
+                    has_dynamic_offset: true,
+                    min_binding_size: BufferSize::new(ViewSize::std140_size_static() as u64),
+                },
+                count: None,
+            }],
+        });
+
         let pbr_pipeline = world.get_resource::<PbrShaders>().unwrap();
 
         let pipeline_layout = render_device.create_pipeline_layout(&PipelineLayoutDescriptor {
@@ -154,6 +174,7 @@ impl FromWorld for CustomPipeline {
                 &pbr_pipeline.view_layout,
                 &material_layout,
                 &pbr_pipeline.mesh_layout,
+                &view_size_layout,
             ],
         });
 
@@ -236,11 +257,93 @@ impl FromWorld for CustomPipeline {
             },
         });
 
-        CustomPipeline {
+        CustomShaders {
             pipeline,
             material_layout,
+            view_size_layout,
         }
     }
+}
+
+#[derive(Default)]
+struct CustomShaderMeta {
+    view_size_bind_group: Option<BindGroup>,
+}
+
+struct ViewSize {
+    size: Vec2,
+}
+impl AsStd140 for ViewSize {
+    type Std140Type = crevice::std140::Vec2;
+
+    fn as_std140(&self) -> Self::Std140Type {
+        crevice::std140::Vec2 {
+            x: self.size.x,
+            y: self.size.y,
+        }
+    }
+
+    fn from_std140(val: Self::Std140Type) -> Self {
+        ViewSize {
+            size: Vec2::new(val.x, val.y),
+        }
+    }
+}
+struct ViewSizeUniformOffset(u32);
+
+#[derive(Default)]
+struct ViewSizeUniforms {
+    pub uniforms: DynamicUniformVec<ViewSize>,
+}
+impl ViewSizeUniforms {
+    fn push(&mut self, value: ViewSize) -> ViewSizeUniformOffset {
+        let offset = self.uniforms.push(value);
+        ViewSizeUniformOffset(offset)
+    }
+}
+
+fn prepare_view_sizes(
+    mut commands: Commands,
+    render_device: Res<RenderDevice>,
+    render_queue: Res<RenderQueue>,
+    mut view_size_uniforms: ResMut<ViewSizeUniforms>,
+    extracted_views: Query<(Entity, &ExtractedView)>,
+) {
+    view_size_uniforms
+        .uniforms
+        .reserve_and_clear(extracted_views.iter().len(), &render_device);
+
+    for (entity, view) in extracted_views.iter() {
+        let offset = view_size_uniforms.push(ViewSize {
+            size: Vec2::new(view.width as f32, view.height as f32),
+        });
+
+        commands.entity(entity).insert(offset);
+    }
+
+    view_size_uniforms.uniforms.write_buffer(&render_queue);
+}
+
+fn queue_view_sizes(
+    mut custom_shader_meta: ResMut<CustomShaderMeta>,
+    custom_shaders: Res<CustomShaders>,
+    view_size_uniforms: Res<ViewSizeUniforms>,
+    render_device: Res<RenderDevice>,
+) {
+    let view_size_binding = match view_size_uniforms.uniforms.binding() {
+        Some(val) => val,
+        None => return,
+    };
+
+    let bind_group = render_device.create_bind_group(&BindGroupDescriptor {
+        label: None,
+        layout: &custom_shaders.view_size_layout,
+        entries: &[BindGroupEntry {
+            binding: 0,
+            resource: view_size_binding,
+        }],
+    });
+    custom_shader_meta.view_size_bind_group = Some(bind_group);
 }
 
 pub fn queue_custom(
@@ -272,14 +375,16 @@ type DrawCustom = (
     SetCustomMaterialPipeline,
     SetMeshViewBindGroup<0>,
     SetTransformBindGroup<2>,
+    SetViewSizesBindGroup<3>,
     DrawMesh,
 );
 
 struct SetCustomMaterialPipeline;
+
 impl RenderCommand<Transparent3d> for SetCustomMaterialPipeline {
     type Param = (
         SRes<RenderAssets<CustomMaterial>>,
-        SRes<CustomPipeline>,
+        SRes<CustomShaders>,
         SQuery<Read<Handle<CustomMaterial>>>,
     );
     fn render<'w>(
@@ -292,5 +397,23 @@ impl RenderCommand<Transparent3d> for SetCustomMaterialPipeline {
         let material = materials.into_inner().get(material_handle).unwrap();
         pass.set_render_pipeline(&custom_pipeline.into_inner().pipeline);
         pass.set_bind_group(1, &material.bind_group, &[]);
+    }
+}
+
+struct SetViewSizesBindGroup<const I: usize>;
+
+impl<const I: usize> RenderCommand<Transparent3d> for SetViewSizesBindGroup<I> {
+    type Param = (SRes<CustomShaderMeta>, SQuery<Read<ViewSizeUniformOffset>>);
+
+    fn render<'w>(
+        view: Entity,
+        _: &Transparent3d,
+        (meta, view_size_offsets): SystemParamItem<'w, '_, Self::Param>,
+        pass: &mut TrackedRenderPass<'w>,
+    ) {
+        let view_size_offset = view_size_offsets.get(view).unwrap();
+        let view_size_bind_group = meta.into_inner().view_size_bind_group.as_ref().unwrap();
+
+        pass.set_bind_group(I, view_size_bind_group, &[view_size_offset.0]);
     }
 }

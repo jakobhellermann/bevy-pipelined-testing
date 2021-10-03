@@ -43,7 +43,16 @@ struct CustomMaterial {
 [[group(1), binding(0)]]
 var<uniform> material: CustomMaterial;
 
+
+[[block]]
+struct ViewSize {
+    size: vec2<f32>;
+};
+[[group(3), binding(0)]]
+var<uniform> view_size: ViewSize;
+
 [[stage(fragment)]]
 fn fragment(out: VertexOutput) -> [[location(0)]] vec4<f32> {
-    return vec4<f32>(out.clip_position.x / 1280.0, out.clip_position.y / 720.0, 0.0, 1.0);
+    let uv_view = vec2<f32>(out.clip_position.x / view_size.size.x, out.clip_position.y / view_size.size.y);
+    return vec4<f32>(uv_view.x, uv_view.y, 0.0, 1.0);
 }
