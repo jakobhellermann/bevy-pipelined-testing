@@ -1,6 +1,3 @@
-mod cam_display;
-mod render_to_texture;
-
 use std::f32::consts::TAU;
 
 use bevy::core::Name;
@@ -15,10 +12,9 @@ use bevy::render2::texture::{BevyDefault, Image};
 use bevy::PipelinedDefaultPlugins;
 use bevy_inspector_egui::WorldInspectorPlugin;
 
-use cam_display::{CamDisplay, CamDisplayPlugin};
-use render_to_texture::{RenderToTexture, RenderToTexturePlugin};
-
-mod utils;
+use bevy_portals::cam_display::{CamDisplay, CamDisplayPlugin};
+use bevy_portals::render_to_texture::{RenderToTexture, RenderToTexturePlugin};
+use bevy_portals::utils;
 
 fn main() {
     let mut app = App::new();

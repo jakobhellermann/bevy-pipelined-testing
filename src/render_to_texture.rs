@@ -1,5 +1,5 @@
 use bevy::core_pipeline::node::MAIN_PASS_DEPENDENCIES;
-use bevy::core_pipeline::{draw_3d_graph, Transparent3dPhase, ViewDepthTexture};
+use bevy::core_pipeline::{draw_3d_graph, Transparent3d, ViewDepthTexture};
 use bevy::ecs::prelude::*;
 use bevy::prelude::{App, Assets, Handle, Plugin};
 use bevy::render2::camera::Camera;
@@ -70,7 +70,7 @@ fn extract_rtt_render_phase(
     for (entity, render_to_texture) in cams.iter() {
         let mut entity = commands.get_or_spawn(entity);
 
-        entity.insert(RenderPhase::<Transparent3dPhase>::default());
+        entity.insert(RenderPhase::<Transparent3d>::default());
         entity.insert(RenderToTexture(render_to_texture.0.clone_weak()));
     }
 }

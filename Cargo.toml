@@ -1,12 +1,15 @@
 [package]
-name = "bevy-pipelined-testing"
+name = "bevy_portals"
 version = "0.1.0"
 edition = "2018"
 
 [dependencies]
-bevy = { git = "https://github.com/bevyengine/bevy", branch = "pipelined-rendering" }
+bevy = { git = "https://github.com/bevyengine/bevy", branch = "pipelined-rendering", features = ["bevy_render2", "bevy_pbr2", "bevy_core_pipeline"] }
+
 bevy-inspector-egui = { git = "https://github.com/jakobhellermann/bevy-inspector-egui", branch = "bevy-pipelined" }
 bevy_mod_debugdump = { git = "https://github.com/jakobhellermann/bevy_mod_debugdump", branch = "pipelined" }
+crevice = { git = "https://github.com/bevyengine/bevy", branch = "pipelined-rendering" }
+
 
 # [patch."https://github.com/bevyengine/bevy"]
 # bevy = { path = "/home/jakob/dev/rust/contrib/bevy/bevy" }
