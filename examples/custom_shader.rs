@@ -4,7 +4,9 @@ use bevy::ecs::system::lifetimeless::*;
 use bevy::ecs::system::SystemParamItem;
 use bevy::math::{Vec2, Vec3, Vec4};
 use bevy::pbr2::{DrawMesh, MeshUniform, PbrShaders, SetMeshViewBindGroup, SetTransformBindGroup};
-use bevy::prelude::{AddAsset, App, Assets, GlobalTransform, Handle, Plugin, Transform};
+use bevy::prelude::{
+    AddAsset, App, AssetServer, Assets, GlobalTransform, Handle, Plugin, Transform,
+};
 use bevy::reflect::TypeUuid;
 use bevy::render2::camera::PerspectiveCameraBundle;
 use bevy::render2::color::Color;
@@ -19,7 +21,7 @@ use bevy::render2::render_phase::{
 use bevy::render2::render_resource::*;
 use bevy::render2::renderer::{RenderDevice, RenderQueue};
 use bevy::render2::shader::Shader;
-use bevy::render2::texture::BevyDefault;
+use bevy::render2::texture::{BevyDefault, GpuImage, Image};
 use bevy::render2::view::ExtractedView;
 use bevy::render2::{RenderApp, RenderStage};
 use bevy::PipelinedDefaultPlugins;
@@ -30,6 +32,7 @@ use crevice::std140::{AsStd140, Std140};
 #[uuid = "4ee9c363-1124-4113-890e-199d81b00281"]
 pub struct CustomMaterial {
     color: Color,
+    texture: Handle<Image>,
 }
 
 #[derive(Clone)]
@@ -41,7 +44,11 @@ pub struct GpuCustomMaterial {
 impl RenderAsset for CustomMaterial {
     type ExtractedAsset = CustomMaterial;
     type PreparedAsset = GpuCustomMaterial;
-    type Param = (SRes<RenderDevice>, SRes<CustomShaders>);
+    type Param = (
+        SRes<RenderDevice>,
+        SRes<CustomShaders>,
+        SRes<RenderAssets<Image>>,
+    );
 
     fn extract_asset(&self) -> Self::ExtractedAsset {
         self.clone()
@@ -49,19 +56,38 @@ impl RenderAsset for CustomMaterial {
 
     fn prepare_asset(
         extracted_asset: Self::ExtractedAsset,
-        (render_device, custom_pipeline): &mut SystemParamItem<Self::Param>,
+        (render_device, custom_pipeline, gpu_images): &mut SystemParamItem<Self::Param>,
     ) -> Result<Self::PreparedAsset, PrepareAssetError<Self::ExtractedAsset>> {
+        // color
         let color: Vec4 = extracted_asset.color.as_rgba_linear().into();
         let buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
             contents: color.as_std140().as_bytes(),
             label: None,
             usage: BufferUsage::UNIFORM | BufferUsage::COPY_DST,
         });
+
+        // texture
+        let gpu_image: &GpuImage = match gpu_images.get(&extracted_asset.texture) {
+            Some(gpu_image) => gpu_image,
+            None => return Err(PrepareAssetError::RetryNextUpdate(extracted_asset)),
+        };
+
+        // bind group
         let bind_group = render_device.create_bind_group(&BindGroupDescriptor {
-            entries: &[BindGroupEntry {
-                binding: 0,
-                resource: buffer.as_entire_binding(),
-            }],
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::TextureView(&gpu_image.texture_view),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: BindingResource::Sampler(&gpu_image.sampler),
+                },
+            ],
             label: None,
             layout: &custom_pipeline.material_layout,
         });
@@ -72,6 +98,7 @@ impl RenderAsset for CustomMaterial {
         })
     }
 }
+
 pub struct CustomMaterialPlugin;
 
 impl Plugin for CustomMaterialPlugin {
@@ -104,7 +131,10 @@ fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<CustomMaterial>>,
+    asset_server: Res<AssetServer>,
 ) {
+    let texture = asset_server.load("texture.png");
+
     // cube
     commands.spawn().insert_bundle((
         meshes.add(Mesh::from(shape::Cube { size: 1.0 })),
@@ -112,6 +142,7 @@ fn setup(
         GlobalTransform::default(),
         materials.add(CustomMaterial {
             color: Color::GREEN,
+            texture,
         }),
     ));
 
@@ -138,16 +169,40 @@ impl FromWorld for CustomShaders {
         let shader_module = render_device.create_shader_module(&shader);
 
         let material_layout = render_device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            entries: &[BindGroupLayoutEntry {
-                binding: 0,
-                visibility: ShaderStage::FRAGMENT,
-                ty: BindingType::Buffer {
-                    ty: BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: BufferSize::new(Vec4::std140_size_static() as u64),
+            entries: &[
+                // uniform data
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStage::FRAGMENT,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: BufferSize::new(Vec4::std140_size_static() as u64),
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                // texture
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStage::FRAGMENT,
+                    ty: BindingType::Texture {
+                        multisampled: false,
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
+                // sampler
+                BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: ShaderStage::FRAGMENT,
+                    ty: BindingType::Sampler {
+                        comparison: false,
+                        filtering: true,
+                    },
+                    count: None,
+                },
+            ],
             label: None,
         });
 
