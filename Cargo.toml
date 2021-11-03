@@ -2,6 +2,7 @@
 name = "bevy_portals"
 version = "0.1.0"
 edition = "2018"
+resolver = "2"
 
 [dependencies]
 bevy = { git = "https://github.com/bevyengine/bevy", branch = "pipelined-rendering", features = ["bevy_render2", "bevy_pbr2", "bevy_core_pipeline"] }
